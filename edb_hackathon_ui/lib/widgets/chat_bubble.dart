@@ -14,6 +14,80 @@ class ChatBubble extends StatefulWidget {
     this.onProductExplore,
   });
 
+  // ── Static helpers: called by ChatScreen to extract insights for InsightsScreen ──
+
+  static Map<String, double> parseSpendingInsights(String text) {
+    final Map<String, double> insights = {};
+    final lines = text.split('\n');
+    final regExp = RegExp(
+      r'^\s*[\*\-]\s*(?:\*\*)?([a-zA-Z\s\&]+?)(?:\s*\(.*?\))?(?:\*\*)?\s*:\s*(?:approximately\s+)?£\s*([\d,]+(?:\.\d{2})?)',
+      caseSensitive: false,
+    );
+    for (final line in lines) {
+      final match = regExp.firstMatch(line);
+      if (match != null) {
+        final category = match.group(1)!.trim();
+        final amountStr = match.group(2)!.replaceAll(',', '');
+        final amount = double.tryParse(amountStr);
+        final lowerCat = category.toLowerCase();
+        if (lowerCat.contains('account') || lowerCat.contains('saver') ||
+            lowerCat.contains('balance') || lowerCat.contains('vault')) {
+          continue;
+        }
+        if (amount != null && amount > 0) {
+          final cleanCat = _normalizeCategory(category);
+          insights[cleanCat] = (insights[cleanCat] ?? 0) + amount;
+        }
+      }
+    }
+    return insights;
+  }
+
+  static String _normalizeCategory(String raw) {
+    final l = raw.toLowerCase();
+    if (l.contains('rent')) return 'Rent & Housing';
+    if (l.contains('utility') || l.contains('gas') ||
+        l.contains('electricity') || l.contains('bill')) { return 'Utilities & Bills'; }
+    if (l.contains('supermarket') || l.contains('grocer') ||
+        l.contains('food')) { return 'Groceries'; }
+    if (l.contains('broadband') || l.contains('internet') ||
+        l.contains('wifi') || l.contains('phone')) { return 'Telecoms & Internet'; }
+    if (l.contains('streaming') || l.contains('netflix') ||
+        l.contains('spotify') || l.contains('disney') ||
+        l.contains('entertainment')) { return 'Entertainment & Subs'; }
+    if (l.contains('travel') || l.contains('transport') ||
+        l.contains('train') || l.contains('bus') ||
+        l.contains('car') || l.contains('commute')) { return 'Travel & Commute'; }
+    if (l.contains('dining') || l.contains('restaurant') ||
+        l.contains('pub') || l.contains('cafe') ||
+        l.contains('takeaway')) { return 'Dining & Leisure'; }
+    return raw;
+  }
+
+  static String? detectGoalType(String text) {
+    final textLower = text.toLowerCase();
+    final hasGoalKeywords = textLower.contains('goal') ||
+        textLower.contains('deposit') ||
+        textLower.contains('renovation') ||
+        textLower.contains('pension') ||
+        textLower.contains('tax efficiency') ||
+        textLower.contains('credit builder') ||
+        textLower.contains('mortgage options') ||
+        textLower.contains('financial assessment');
+    if (!hasGoalKeywords) return null;
+    if (textLower.contains('c001') || textLower.contains('alice') ||
+        textLower.contains('first home')) { return 'C001'; }
+    if (textLower.contains('c002') || textLower.contains('bob') ||
+        textLower.contains('isa balance')) { return 'C002'; }
+    if (textLower.contains('c003') || textLower.contains('clara') ||
+        textLower.contains('regular savings')) { return 'C003'; }
+    if (textLower.contains('c004') || textLower.contains('david') ||
+        textLower.contains('refinancing')) { return 'C004'; }
+    if (textLower.contains('c005') || textLower.contains('evelyn') ||
+        textLower.contains('investing')) { return 'C005'; }
+    return null;
+  }
+
   @override
   State<ChatBubble> createState() => _ChatBubbleState();
 }
@@ -29,7 +103,7 @@ class _ChatBubbleState extends State<ChatBubble> with SingleTickerProviderStateM
       vsync: this,
       duration: const Duration(milliseconds: 1200),
     )..repeat(reverse: true);
-    
+
     // Automatically expand thinking steps for the active/loading message
     if (widget.message.isThinking) {
       _isThinkingExpanded = true;
@@ -45,7 +119,7 @@ class _ChatBubbleState extends State<ChatBubble> with SingleTickerProviderStateM
   @override
   Widget build(BuildContext context) {
     final isUser = widget.message.sender == MessageSender.user;
-    
+
     // Lloyds Brand Colors
     const brandGreen = Color(0xFF006A4E);
     const deepGreen = Color(0xFF002C1B);
@@ -77,7 +151,7 @@ class _ChatBubbleState extends State<ChatBubble> with SingleTickerProviderStateM
             ),
             const SizedBox(width: 10),
           ],
-          
+
           // Bubble Body
           Expanded(
             child: Column(
@@ -108,7 +182,7 @@ class _ChatBubbleState extends State<ChatBubble> with SingleTickerProviderStateM
                     ],
                   ),
                 ),
-                
+
                 // Actual Text / Bubble Card
                 if (widget.message.isThinking)
                   _buildThinkingBubble(context)
@@ -125,7 +199,7 @@ class _ChatBubbleState extends State<ChatBubble> with SingleTickerProviderStateM
                       ),
                       boxShadow: [
                         BoxShadow(
-                          color: Colors.black.withOpacity(0.03),
+                          color: Colors.black.withValues(alpha: 0.03),
                           blurRadius: 4,
                           offset: const Offset(0, 2),
                         ),
@@ -180,7 +254,7 @@ class _ChatBubbleState extends State<ChatBubble> with SingleTickerProviderStateM
               ],
             ),
           ),
-          
+
           // User Avatar
           if (isUser) ...[
             const SizedBox(width: 10),
@@ -188,7 +262,7 @@ class _ChatBubbleState extends State<ChatBubble> with SingleTickerProviderStateM
               width: 36,
               height: 36,
               decoration: BoxDecoration(
-                color: brandGold.withOpacity(0.15),
+                color: brandGold.withValues(alpha: 0.15),
                 shape: BoxShape.circle,
                 border: Border.all(
                   color: brandGold,
@@ -225,7 +299,7 @@ class _ChatBubbleState extends State<ChatBubble> with SingleTickerProviderStateM
           bottomRight: Radius.circular(16),
         ),
         border: Border.all(
-          color: brandGreen.withOpacity(0.1),
+          color: brandGreen.withValues(alpha: 0.1),
           width: 1,
         ),
       ),
@@ -259,7 +333,9 @@ class _ChatBubbleState extends State<ChatBubble> with SingleTickerProviderStateM
           ),
           const SizedBox(height: 8),
           Text(
-            widget.message.text.isNotEmpty ? widget.message.text : 'Accessing secure customer vaults...',
+            widget.message.text.isNotEmpty
+                ? widget.message.text
+                : 'Accessing secure customer vaults...',
             style: TextStyle(
               color: Colors.grey[600],
               fontSize: 11,
@@ -282,7 +358,7 @@ class _ChatBubbleState extends State<ChatBubble> with SingleTickerProviderStateM
         color: const Color(0xFFFAFBFB),
         borderRadius: BorderRadius.circular(10),
         border: Border.all(
-          color: Colors.grey.withOpacity(0.2),
+          color: Colors.grey.withValues(alpha: 0.2),
           width: 0.8,
         ),
       ),
@@ -320,7 +396,7 @@ class _ChatBubbleState extends State<ChatBubble> with SingleTickerProviderStateM
                     child: Text(
                       'AGENT REASONING PIPELINE',
                       style: TextStyle(
-                        color: deepGreen.withOpacity(0.8),
+                        color: deepGreen.withValues(alpha: 0.8),
                         fontSize: 10,
                         fontWeight: FontWeight.bold,
                         letterSpacing: 0.5,
@@ -330,7 +406,7 @@ class _ChatBubbleState extends State<ChatBubble> with SingleTickerProviderStateM
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                     decoration: BoxDecoration(
-                      color: brandGreen.withOpacity(0.08),
+                      color: brandGreen.withValues(alpha: 0.08),
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Text(
@@ -346,7 +422,7 @@ class _ChatBubbleState extends State<ChatBubble> with SingleTickerProviderStateM
               ),
             ),
           ),
-          
+
           // Collapsible Content
           if (_isThinkingExpanded)
             Container(
@@ -358,7 +434,7 @@ class _ChatBubbleState extends State<ChatBubble> with SingleTickerProviderStateM
                 itemBuilder: (context, index) {
                   final step = widget.message.thinkingSteps[index];
                   final isLast = index == widget.message.thinkingSteps.length - 1;
-                  
+
                   return IntrinsicHeight(
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -370,9 +446,11 @@ class _ChatBubbleState extends State<ChatBubble> with SingleTickerProviderStateM
                               width: 6,
                               height: 6,
                               decoration: BoxDecoration(
-                                color: step.contains('⚠️') 
-                                    ? Colors.amber 
-                                    : (step.contains('✅') || step.contains('[DB]') ? brandGreen : brandGold),
+                                color: step.contains('⚠️')
+                                    ? Colors.amber
+                                    : (step.contains('✅') || step.contains('[DB]')
+                                        ? brandGreen
+                                        : brandGold),
                                 shape: BoxShape.circle,
                               ),
                             ),
@@ -386,7 +464,7 @@ class _ChatBubbleState extends State<ChatBubble> with SingleTickerProviderStateM
                           ],
                         ),
                         const SizedBox(width: 10),
-                        
+
                         // Step Content
                         Expanded(
                           child: Padding(
@@ -397,7 +475,7 @@ class _ChatBubbleState extends State<ChatBubble> with SingleTickerProviderStateM
                                 color: Colors.grey[750] ?? const Color(0xFF4A4A4A),
                                 fontSize: 11,
                                 height: 1.3,
-                                fontFamily: 'Courier', // monospace code trace style
+                                fontFamily: 'Courier',
                               ),
                             ),
                           ),

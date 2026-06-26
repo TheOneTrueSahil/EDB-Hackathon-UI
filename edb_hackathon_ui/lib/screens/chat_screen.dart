@@ -6,6 +6,7 @@ import '../models/lloyds_product.dart';
 import '../services/agent_service.dart';
 import '../widgets/chat_bubble.dart';
 import '../widgets/persona_selector.dart';
+import 'insights_screen.dart';
 import 'settings_screen.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -32,6 +33,10 @@ class _ChatScreenState extends State<ChatScreen> {
   late String _sessionId;
   bool _isGenerating = false;
 
+  // Accumulated insights data for the InsightsScreen
+  Map<String, double> _accumulatedSpending = {};
+  String? _accumulatedGoalType;
+
   @override
   void initState() {
     super.initState();
@@ -55,6 +60,9 @@ class _ChatScreenState extends State<ChatScreen> {
   void _setInitialPersonaState(Persona persona) {
     _messages.clear();
     _sessionId = 'session_${persona.id}_${DateTime.now().millisecondsSinceEpoch}';
+    // Reset accumulated insights when switching personas
+    _accumulatedSpending = {};
+    _accumulatedGoalType = null;
     
     // Add system-like welcome message showing retrieved database parameters
     _messages.add(ChatMessage(
@@ -62,6 +70,10 @@ class _ChatScreenState extends State<ChatScreen> {
       text: 'Hello! I am your **Lloyds Banking Assistant**.\n\n'
           'I have automatically retrieved your customer profile for **${persona.name}** from the Lloyds secure vault. Here is the background context I am using for our chat:\n\n'
           '*   **Profile Segment**: ${persona.role}\n'
+          '*   **DOB**: ${persona.dob}\n'
+          '*   **Gender**: ${persona.gender == 'F' ? 'Female' : 'Male'}\n'
+          '*   **Phone**: ${persona.phone}\n'
+          '*   **Address**: ${persona.address}, ${persona.postcode}\n'
           '*   **Annual Income**: ${persona.income}\n'
           '*   **Current Savings**: ${persona.savings}\n'
           '*   **Stated Goal**: ${persona.financialGoal}\n\n'
@@ -175,11 +187,20 @@ class _ChatScreenState extends State<ChatScreen> {
       // Stop our timer if it was running
       thinkingTimer.cancel();
 
+      // Extract spending insights and goal type from the response
+      final newInsights = ChatBubble.parseSpendingInsights(responseMessage.text);
+      final newGoalType = ChatBubble.detectGoalType(responseMessage.text);
+
       setState(() {
         // Remove the thinking placeholder and insert the actual response
         _messages.removeWhere((m) => m.id == placeholderId);
         _messages.add(responseMessage);
         _isGenerating = false;
+        // Accumulate spending data across messages
+        newInsights.forEach((cat, amt) {
+          _accumulatedSpending[cat] = (_accumulatedSpending[cat] ?? 0) + amt;
+        });
+        if (newGoalType != null) _accumulatedGoalType = newGoalType;
       });
       _scrollToBottom();
     } catch (e) {
@@ -403,32 +424,38 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Retrives suggestion chips tailored to the selected persona
   List<String> _getSuggestionChips() {
     switch (_currentPersona.id) {
-      case 'sarah':
+      case 'C001':
         return [
-          'What LISA bonus can I get?',
-          'Estimate my mortgage borrowing',
-          'Tell me about Advantage Saver'
+          'Please verify me as C001',
+          'Show my spending insights',
+          'Mortgage options for Alice'
         ];
-      case 'david':
+      case 'C002':
         return [
-          'How does the Cash ISA work?',
-          'What is Smart Investor fee?',
-          'Optimize my £185,000 cash'
+          'Please verify me as C002',
+          'Review my Cash ISA',
+          'Tax-efficient savings options'
         ];
-      case 'marcus_chloe':
+      case 'C003':
         return [
-          'Loan rates for loft conversion',
-          'Open Junior Cash ISA',
-          'Savings options for kids'
+          'Please verify me as C003',
+          'Regular monthly savers',
+          'Emergency fund advice'
         ];
-      case 'emily':
+      case 'C004':
         return [
-          'How to build UK credit score?',
-          'Travel budget savings accounts',
-          'Student account perks'
+          'Please verify me as C004',
+          'Refinance my £185k mortgage',
+          'Lloyds personal loan rates'
+        ];
+      case 'C005':
+        return [
+          'Please verify me as C005',
+          'Optimize my £16k savings',
+          'Stocks & Shares ISA details'
         ];
       default:
-        return ['High yield savings options', 'Mortgage rates', 'Personal Loans'];
+        return ['Verify customer ID', 'Lloyds savings products', 'Mortgage calculator'];
     }
   }
 
@@ -488,6 +515,23 @@ class _ChatScreenState extends State<ChatScreen> {
           ],
         ),
         actions: [
+          // Insights Dashboard button
+          IconButton(
+            icon: const Icon(Icons.insights_rounded, color: brandGold),
+            tooltip: 'Spending & Goals Dashboard',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => InsightsScreen(
+                    persona: _currentPersona,
+                    spendingInsights: Map.from(_accumulatedSpending),
+                    goalType: _accumulatedGoalType ?? _currentPersona.id,
+                  ),
+                ),
+              );
+            },
+          ),
           // Config gear
           IconButton(
             icon: const Icon(Icons.settings_outlined, color: Colors.white),
