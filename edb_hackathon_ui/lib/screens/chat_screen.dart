@@ -525,8 +525,10 @@ class _ChatScreenState extends State<ChatScreen> {
                 MaterialPageRoute(
                   builder: (context) => InsightsScreen(
                     persona: _currentPersona,
-                    spendingInsights: Map.from(_accumulatedSpending),
-                    goalType: _accumulatedGoalType ?? _currentPersona.id,
+                    apiUrl: _apiUrl,
+                    apiKey: _apiKey,
+                    seedSpending: Map.from(_accumulatedSpending),
+                    seedGoalType: _accumulatedGoalType ?? _currentPersona.id,
                   ),
                 ),
               );

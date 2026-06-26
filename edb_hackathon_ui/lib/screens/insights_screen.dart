@@ -1,16 +1,23 @@
 import 'package:flutter/material.dart';
 import '../models/persona.dart';
+import '../services/agent_service.dart';
+import '../widgets/chat_bubble.dart';
 
 class InsightsScreen extends StatefulWidget {
   final Persona persona;
-  final Map<String, double> spendingInsights;
-  final String? goalType;
+  final String apiUrl;
+  final String apiKey;
+  // Optionally seed with already-accumulated data
+  final Map<String, double> seedSpending;
+  final String? seedGoalType;
 
   const InsightsScreen({
     super.key,
     required this.persona,
-    required this.spendingInsights,
-    this.goalType,
+    required this.apiUrl,
+    required this.apiKey,
+    this.seedSpending = const {},
+    this.seedGoalType,
   });
 
   @override
@@ -26,10 +33,23 @@ class _InsightsScreenState extends State<InsightsScreen>
   static const brandGold = Color(0xFFB59049);
   static const lightMint = Color(0xFFF0F7F4);
 
+  bool _isLoadingSpending = false;
+  bool _isLoadingGoal = false;
+  String? _spendingError;
+  String? _goalError;
+
+  Map<String, double> _spending = {};
+  String? _rawSpendingResponse;
+
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
+    // Seed with already-accumulated data
+    _spending = Map.from(widget.seedSpending);
+    // Auto-fetch on open
+    _fetchSpendingInsights();
+    _fetchGoalInsights();
   }
 
   @override
@@ -37,6 +57,90 @@ class _InsightsScreenState extends State<InsightsScreen>
     _tabController.dispose();
     super.dispose();
   }
+
+  // ─── Auto-fetch from real API ─────────────────────────────────────────────
+
+  Future<void> _fetchSpendingInsights() async {
+    setState(() {
+      _isLoadingSpending = true;
+      _spendingError = null;
+    });
+
+    try {
+      final service = AgentService();
+      final sessionId =
+          'insights_${widget.persona.id}_${DateTime.now().millisecondsSinceEpoch}';
+
+      final prompt =
+          'Please verify me as ${widget.persona.id} and then give me a detailed '
+          'monthly spending breakdown by category. '
+          'List each category as a bullet point with the amount in GBP, '
+          'for example: * Groceries: £350.00. Then give me 2-3 actionable tips '
+          'to improve my spending habits.';
+
+      final response = await service.sendMessage(
+        text: prompt,
+        sessionId: sessionId,
+        persona: widget.persona,
+        history: const [],
+        apiUrl: widget.apiUrl,
+        apiKey: widget.apiKey,
+      );
+
+      final parsed = ChatBubble.parseSpendingInsights(response.text);
+      setState(() {
+        _rawSpendingResponse = response.text;
+        if (parsed.isNotEmpty) {
+          _spending = parsed;
+        }
+        _isLoadingSpending = false;
+      });
+    } catch (e) {
+      setState(() {
+        _isLoadingSpending = false;
+        _spendingError = e.toString();
+      });
+    }
+  }
+
+  Future<void> _fetchGoalInsights() async {
+    setState(() {
+      _isLoadingGoal = true;
+      _goalError = null;
+    });
+    // Small delay so the two calls don't overlap on the endpoint
+    await Future.delayed(const Duration(seconds: 3));
+
+    try {
+      final service = AgentService();
+      final sessionId =
+          'goals_${widget.persona.id}_${DateTime.now().millisecondsSinceEpoch}';
+
+      final prompt =
+          'I am customer ${widget.persona.id}. What is my current financial goal '
+          'progress and what are the next steps I should take to achieve it?';
+
+      await service.sendMessage(
+        text: prompt,
+        sessionId: sessionId,
+        persona: widget.persona,
+        history: const [],
+        apiUrl: widget.apiUrl,
+        apiKey: widget.apiKey,
+      );
+
+      setState(() {
+        _isLoadingGoal = false;
+      });
+    } catch (e) {
+      setState(() {
+        _isLoadingGoal = false;
+        _goalError = e.toString();
+      });
+    }
+  }
+
+  // ─── Build ────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -71,6 +175,32 @@ class _InsightsScreenState extends State<InsightsScreen>
             ),
           ],
         ),
+        actions: [
+          if (_isLoadingSpending || _isLoadingGoal)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 12),
+              child: Center(
+                child: SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: brandGold,
+                  ),
+                ),
+              ),
+            ),
+          IconButton(
+            icon: const Icon(Icons.refresh_rounded),
+            tooltip: 'Refresh insights',
+            onPressed: (_isLoadingSpending || _isLoadingGoal)
+                ? null
+                : () {
+                    _fetchSpendingInsights();
+                    _fetchGoalInsights();
+                  },
+          ),
+        ],
         bottom: TabBar(
           controller: _tabController,
           indicatorColor: brandGold,
@@ -83,14 +213,8 @@ class _InsightsScreenState extends State<InsightsScreen>
             letterSpacing: 0.5,
           ),
           tabs: const [
-            Tab(
-              icon: Icon(Icons.analytics_rounded, size: 18),
-              text: 'SPENDING ANALYSIS',
-            ),
-            Tab(
-              icon: Icon(Icons.flag_rounded, size: 18),
-              text: 'FINANCIAL GOALS',
-            ),
+            Tab(icon: Icon(Icons.analytics_rounded, size: 18), text: 'SPENDING'),
+            Tab(icon: Icon(Icons.flag_rounded, size: 18), text: 'GOALS'),
           ],
         ),
       ),
@@ -104,29 +228,70 @@ class _InsightsScreenState extends State<InsightsScreen>
     );
   }
 
-  // ─── SPENDING TAB ────────────────────────────────────────────────────────────
+  // ─── SPENDING TAB ─────────────────────────────────────────────────────────
 
   Widget _buildSpendingTab(BuildContext context) {
-    if (widget.spendingInsights.isEmpty) {
+    if (_isLoadingSpending) {
+      return _buildLoadingState(
+        label: 'Fetching live spending data for ${widget.persona.name}...',
+      );
+    }
+    if (_spendingError != null) {
+      return _buildErrorState(
+        error: _spendingError!,
+        onRetry: _fetchSpendingInsights,
+      );
+    }
+    if (_spending.isEmpty) {
       return _buildEmptyState(
         icon: Icons.analytics_outlined,
-        title: 'No Spending Data Yet',
+        title: 'No Spending Data Found',
         subtitle:
-            'Ask the assistant about your spending habits or request a breakdown to populate this view.',
+            'The agent could not parse spending categories from the response. '
+            'Try refreshing or ask the agent directly about spending.',
+        onRetry: _fetchSpendingInsights,
       );
     }
 
-    final spending = widget.spendingInsights;
-    final double total =
-        spending.values.fold(0.0, (sum, val) => sum + val);
+    final double total = _spending.values.fold(0.0, (s, v) => s + v);
 
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        // Summary card
-        _buildSectionHeader(
-            Icons.analytics_rounded, 'SPENDING ANALYSIS & BREAKDOWN'),
+        _buildSectionHeader(Icons.analytics_rounded, 'LIVE SPENDING ANALYSIS'),
+        const SizedBox(height: 8),
+
+        // Live badge
+        Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: brandGreen,
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.circle, color: Colors.greenAccent, size: 6),
+                  SizedBox(width: 5),
+                  Text(
+                    'LIVE FROM AGENT',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 9,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
         const SizedBox(height: 12),
+
+        // Main card
         Container(
           width: double.infinity,
           decoration: BoxDecoration(
@@ -144,10 +309,9 @@ class _InsightsScreenState extends State<InsightsScreen>
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Card header
+              // Header
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                 decoration: const BoxDecoration(
                   color: deepGreen,
                   borderRadius: BorderRadius.only(
@@ -159,7 +323,7 @@ class _InsightsScreenState extends State<InsightsScreen>
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     const Text(
-                      'Analyzed Outgoings (Monthly)',
+                      'Analyzed Monthly Outgoings',
                       style: TextStyle(
                         color: Colors.white70,
                         fontSize: 11,
@@ -182,7 +346,7 @@ class _InsightsScreenState extends State<InsightsScreen>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    ...spending.entries.map((entry) {
+                    ..._spending.entries.map((entry) {
                       final cat = entry.key;
                       final amt = entry.value;
                       final pct = total > 0 ? amt / total : 0.0;
@@ -205,14 +369,12 @@ class _InsightsScreenState extends State<InsightsScreen>
                                 ),
                                 const SizedBox(width: 10),
                                 Expanded(
-                                  child: Text(
-                                    cat,
-                                    style: const TextStyle(
-                                      color: Color(0xFF2C2C2C),
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
+                                  child: Text(cat,
+                                      style: const TextStyle(
+                                        color: Color(0xFF2C2C2C),
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                      )),
                                 ),
                                 Text(
                                   '£${amt.toStringAsFixed(2)}',
@@ -231,8 +393,7 @@ class _InsightsScreenState extends State<InsightsScreen>
                                 value: pct,
                                 minHeight: 7,
                                 backgroundColor: const Color(0xFFF4F6F5),
-                                valueColor:
-                                    AlwaysStoppedAnimation<Color>(color),
+                                valueColor: AlwaysStoppedAnimation<Color>(color),
                               ),
                             ),
                             const SizedBox(height: 3),
@@ -257,39 +418,38 @@ class _InsightsScreenState extends State<InsightsScreen>
           ),
         ),
         const SizedBox(height: 16),
-        _buildHabitTipCard(context),
+        _buildHabitTipCard(),
+
+        // Show raw agent response as accordion for transparency
+        if (_rawSpendingResponse != null) ...[
+          const SizedBox(height: 16),
+          _buildRawResponseAccordion(_rawSpendingResponse!),
+        ],
       ],
     );
   }
 
-  Widget _buildHabitTipCard(BuildContext context) {
+  Widget _buildHabitTipCard() {
     final id = widget.persona.id;
     String tipText;
     if (id == 'C001') {
-      tipText =
-          'Save £50/month on dining out to reach your home deposit milestone 3 months earlier.';
+      tipText = 'Save £50/month on dining out to reach your home deposit milestone 3 months earlier.';
     } else if (id == 'C002') {
-      tipText =
-          'Move surplus Classic Account cash into your Cash ISA to maximize tax-free yields.';
+      tipText = 'Move surplus Classic Account cash into your Cash ISA to maximize tax-free yields.';
     } else if (id == 'C003') {
-      tipText =
-          'Open a Club Lloyds Saver (5.25% AER) and set a £250 monthly transfer to automate savings.';
+      tipText = 'Open a Club Lloyds Saver (5.25% AER) and set a £250 monthly transfer to automate savings.';
     } else if (id == 'C004') {
-      tipText =
-          'Explore refinancing options for your £185k mortgage to lower interest expenses.';
+      tipText = 'Explore refinancing options for your £185k mortgage to lower interest expenses.';
     } else {
-      tipText =
-          'Move £9k from Easy Saver into a Stocks & Shares ISA to access long-term market growth.';
+      tipText = 'Move £9k from Easy Saver into a Stocks & Shares ISA to access long-term market growth.';
     }
-
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: const Color(0xFFFAF7F0),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-            color: brandGold.withValues(alpha: 0.35), width: 0.8),
+        border: Border.all(color: brandGold.withValues(alpha: 0.35), width: 0.8),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -325,6 +485,44 @@ class _InsightsScreenState extends State<InsightsScreen>
     );
   }
 
+  Widget _buildRawResponseAccordion(String text) {
+    return Theme(
+      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.grey[200]!, width: 1),
+        ),
+        child: ExpansionTile(
+          tilePadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+          leading: const Icon(Icons.psychology_outlined, color: brandGreen, size: 18),
+          title: const Text(
+            'Agent Response (raw)',
+            style: TextStyle(
+              color: deepGreen,
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+              child: Text(
+                text,
+                style: TextStyle(
+                  color: Colors.grey[700],
+                  fontSize: 11,
+                  height: 1.5,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   (IconData, Color) _categoryMeta(String cat) {
     switch (cat) {
       case 'Rent & Housing':
@@ -346,10 +544,22 @@ class _InsightsScreenState extends State<InsightsScreen>
     }
   }
 
-  // ─── FINANCIAL GOALS TAB ─────────────────────────────────────────────────────
+  // ─── GOALS TAB ────────────────────────────────────────────────────────────
 
   Widget _buildGoalTab(BuildContext context) {
-    final goalType = widget.goalType ?? widget.persona.id;
+    if (_isLoadingGoal) {
+      return _buildLoadingState(
+        label: 'Fetching financial goal data for ${widget.persona.name}...',
+      );
+    }
+    if (_goalError != null) {
+      return _buildErrorState(
+        error: _goalError!,
+        onRetry: _fetchGoalInsights,
+      );
+    }
+
+    final id = widget.seedGoalType ?? widget.persona.id;
 
     String title;
     String progressStr;
@@ -358,7 +568,7 @@ class _InsightsScreenState extends State<InsightsScreen>
     String currentLabel;
     List<Map<String, dynamic>> milestones;
 
-    switch (goalType) {
+    switch (id) {
       case 'C001':
         title = 'First Home Deposit Tracker';
         progressStr = '48%';
@@ -431,9 +641,35 @@ class _InsightsScreenState extends State<InsightsScreen>
       padding: const EdgeInsets.all(16),
       children: [
         _buildSectionHeader(Icons.flag_rounded, 'FINANCIAL GOAL PIPELINE'),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: brandGreen,
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.circle, color: Colors.greenAccent, size: 6),
+                  SizedBox(width: 5),
+                  Text(
+                    'LIVE FROM AGENT',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 9,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
         const SizedBox(height: 12),
-
-        // Progress card
         Container(
           width: double.infinity,
           decoration: BoxDecoration(
@@ -451,10 +687,8 @@ class _InsightsScreenState extends State<InsightsScreen>
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Header
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                 decoration: const BoxDecoration(
                   color: brandGreen,
                   borderRadius: BorderRadius.only(
@@ -476,8 +710,7 @@ class _InsightsScreenState extends State<InsightsScreen>
                       ),
                     ),
                     Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 3),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                       decoration: BoxDecoration(
                         color: Colors.white.withValues(alpha: 0.15),
                         borderRadius: BorderRadius.circular(10),
@@ -494,13 +727,11 @@ class _InsightsScreenState extends State<InsightsScreen>
                   ],
                 ),
               ),
-
               Padding(
                 padding: const EdgeInsets.all(16),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Progress metrics
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
@@ -529,8 +760,7 @@ class _InsightsScreenState extends State<InsightsScreen>
                         value: progressPct,
                         minHeight: 10,
                         backgroundColor: const Color(0xFFF4F6F5),
-                        valueColor:
-                            const AlwaysStoppedAnimation<Color>(brandGold),
+                        valueColor: const AlwaysStoppedAnimation<Color>(brandGold),
                       ),
                     ),
                     const SizedBox(height: 4),
@@ -538,16 +768,10 @@ class _InsightsScreenState extends State<InsightsScreen>
                       alignment: Alignment.centerRight,
                       child: Text(
                         targetLabel,
-                        style: TextStyle(
-                          color: Colors.grey[500],
-                          fontSize: 10,
-                        ),
+                        style: TextStyle(color: Colors.grey[500], fontSize: 10),
                       ),
                     ),
-
                     const Divider(height: 28),
-
-                    // Milestones header with progress badge
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
@@ -557,12 +781,10 @@ class _InsightsScreenState extends State<InsightsScreen>
                             color: deepGreen,
                             fontSize: 12,
                             fontWeight: FontWeight.bold,
-                            letterSpacing: 0.2,
                           ),
                         ),
                         Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 3),
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                           decoration: BoxDecoration(
                             color: brandGreen.withValues(alpha: 0.08),
                             borderRadius: BorderRadius.circular(10),
@@ -579,7 +801,6 @@ class _InsightsScreenState extends State<InsightsScreen>
                       ],
                     ),
                     const SizedBox(height: 12),
-
                     ...milestones.map((ms) {
                       final done = ms['done'] as bool;
                       return Padding(
@@ -598,13 +819,9 @@ class _InsightsScreenState extends State<InsightsScreen>
                               child: Text(
                                 ms['text'] as String,
                                 style: TextStyle(
-                                  color: done
-                                      ? Colors.grey[500]
-                                      : const Color(0xFF2C2C2C),
+                                  color: done ? Colors.grey[500] : const Color(0xFF2C2C2C),
                                   fontSize: 13,
-                                  decoration: done
-                                      ? TextDecoration.lineThrough
-                                      : null,
+                                  decoration: done ? TextDecoration.lineThrough : null,
                                   decorationColor: Colors.grey[400],
                                 ),
                               ),
@@ -617,14 +834,12 @@ class _InsightsScreenState extends State<InsightsScreen>
                                   color: brandGreen.withValues(alpha: 0.08),
                                   borderRadius: BorderRadius.circular(6),
                                 ),
-                                child: const Text(
-                                  'Done',
-                                  style: TextStyle(
-                                    color: brandGreen,
-                                    fontSize: 9,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
+                                child: const Text('Done',
+                                    style: TextStyle(
+                                      color: brandGreen,
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.bold,
+                                    )),
                               ),
                           ],
                         ),
@@ -637,8 +852,7 @@ class _InsightsScreenState extends State<InsightsScreen>
           ),
         ),
         const SizedBox(height: 16),
-
-        // Persona summary card
+        // Persona card
         Container(
           width: double.infinity,
           padding: const EdgeInsets.all(14),
@@ -682,10 +896,7 @@ class _InsightsScreenState extends State<InsightsScreen>
                     ),
                     Text(
                       '${widget.persona.role}  ·  ${widget.persona.income}',
-                      style: TextStyle(
-                        color: Colors.grey[600],
-                        fontSize: 11,
-                      ),
+                      style: TextStyle(color: Colors.grey[600], fontSize: 11),
                     ),
                     const SizedBox(height: 2),
                     Text(
@@ -706,12 +917,100 @@ class _InsightsScreenState extends State<InsightsScreen>
     );
   }
 
-  // ─── HELPERS ─────────────────────────────────────────────────────────────────
+  // ─── SHARED HELPERS ───────────────────────────────────────────────────────
 
-  Widget _buildEmptyState(
-      {required IconData icon,
-      required String title,
-      required String subtitle}) {
+  Widget _buildLoadingState({required String label}) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32.0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(
+              width: 48,
+              height: 48,
+              child: CircularProgressIndicator(
+                strokeWidth: 3,
+                color: brandGreen,
+              ),
+            ),
+            const SizedBox(height: 24),
+            const Text(
+              'Contacting Lloyds Agent...',
+              style: TextStyle(
+                color: deepGreen,
+                fontSize: 15,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              label,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.grey[500],
+                fontSize: 12,
+                height: 1.4,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildErrorState({required String error, required VoidCallback onRetry}) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32.0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.cloud_off_rounded, size: 52, color: Color(0xFFB00020)),
+            const SizedBox(height: 16),
+            const Text(
+              'Could Not Reach Agent',
+              style: TextStyle(
+                color: deepGreen,
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              error,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.grey[500],
+                fontSize: 11,
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh_rounded, size: 16),
+              label: const Text('Retry'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: brandGreen,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEmptyState({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    VoidCallback? onRetry,
+  }) {
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(32.0),
@@ -739,6 +1038,21 @@ class _InsightsScreenState extends State<InsightsScreen>
                 height: 1.4,
               ),
             ),
+            if (onRetry != null) ...[
+              const SizedBox(height: 20),
+              ElevatedButton.icon(
+                onPressed: onRetry,
+                icon: const Icon(Icons.refresh_rounded, size: 16),
+                label: const Text('Refresh'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: brandGreen,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       ),
