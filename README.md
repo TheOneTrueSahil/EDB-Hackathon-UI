@@ -3,11 +3,13 @@
 This guide details the design decisions, system architecture, and demo guidelines for the Lloyds themed Flutter application. It serves as a companion for running a high-fidelity demonstration of your Cloud Run agent service.
 
 ## Main chat interface:
+<img width="832" height="981" alt="Screenshot 2026-06-26 at 20 54 38" src="https://github.com/user-attachments/assets/b7cb34b6-14b2-4c27-80d7-cc349fbc9bee" />
 
 ## Insights page:
+<img width="832" height="981" alt="Screenshot 2026-06-26 at 20 55 43" src="https://github.com/user-attachments/assets/84ffcb20-e824-42f2-b0e1-0f64732ce344" />
 
 ## Goals page:
-
+<img width="832" height="981" alt="Screenshot 2026-06-26 at 20 56 27" src="https://github.com/user-attachments/assets/059b6bfa-9270-41ce-8515-3b124e788172" />
 ---
 
 ## 🎨 Lloyds Brand Identity & UX Principles
